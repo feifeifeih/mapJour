@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Optimized Travel Tracker</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Leaflet CSS & JS -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"
+  />
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+
+  <style>
+    /* Basic layout */
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      font-family: Arial, sans-serif;
+    }
+    .container {
+      display: flex;
+      width: 100%;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .list-panel {
+      width: 350px;
+      background: #fff;
+      border-right: 1px solid #ccc;
+      padding: 10px;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    .list-panel .section {
+      margin-bottom: 20px;
+    }
+    h2 {
+      margin-top: 0;
+    }
+    .controls {
+      margin-bottom: 10px;
+    }
+    .form-row {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 8px;
+    }
+    .form-row input,
+    .form-row select {
+      padding: 6px;
+      font-size: 14px;
+    }
+    /* Button */
+    .add-button {
+      width: 100%;
+      padding: 8px;
+      font-size: 14px;
+      background-color: #0078D7;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .add-button:hover {
+      background-color: #005bb5;
+    }
+
+    /* Lists of countries */
+    .country-list {
+      margin-top: 10px;
+    }
+    .country-item {
+      background: #f5f5f5;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      padding: 6px;
+    }
+    .country-toprow {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .country-color-box {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      margin-right: 4px;
+      vertical-align: middle;
+      border: 1px solid #333;
+    }
+    .remove-button {
+      background: #d9534f;
+      color: #fff;
+      border: none;
+      border-radius: 3px;
+      padding: 4px 6px;
+      cursor: pointer;
+      font-size: 0.8em;
+    }
+    .remove-button:hover {
+      background: #c9302c;
+    }
+    .years-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .year-badge {
+      display: flex;
+      align-items: center;
+      padding: 2px 6px;
+      background: #eee;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+    .year-badge .remove-year {
+      margin-left: 6px;
+      background: #d9534f;
+      color: #fff;
+      border: none;
+      border-radius: 3px;
+      padding: 2px 4px;
+      cursor: pointer;
+      font-size: 0.75em;
+    }
+    .map-container {
+      flex: 1;
+      position: relative;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+    /* Suggestions dropdown */
+    #suggestions {
+      position: absolute;
+      top: 38px;
+      left: 0;
+      right: 0;
+      max-height: 150px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      background: #fff;
+      z-index: 9999;
+      display: none;
+    }
+    .suggestion-item {
+      padding: 6px;
+      cursor: pointer;
+    }
+    .suggestion-item:hover {
+      background: #ddd;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- LEFT PANEL -->
+    <div class="list-panel">
+      <div class="section">
+        <h2>Add a Country + Year</h2>
+        <div class="controls">
+          <div class="form-row">
+            <input id="countryInput" type="text" placeholder="Enter country" autocomplete="off">
+            <div id="suggestions"></div>
+          </div>
+          <div class="form-row">
+            <input id="yearInput" type="number" placeholder="Year (e.g. 2023)" />
+          </div>
+          <button class="add-button" onclick="addCountryYear()">Add Country</button>
+        </div>
+      </div>
+
+      <!-- Master List: One entry per country, with multiple years inside -->
+      <div class="section">
+        <h2>All Countries <span id="totalCount">(0)</span></h2>
+        <div id="allList" class="country-list"></div>
+      </div>
+
+      <!-- Filtered by year -->
+      <div class="section">
+        <h2>By Year</h2>
+        <select id="yearFilter" onchange="handleYearFilterChange()">
+          <option value="all">All</option>
+        </select>
+        <div id="yearList" class="country-list" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT PANEL: MAP -->
+    <div class="map-container">
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <script>
+    /****************************************************
+     * 0) Leaflet Map
+     ****************************************************/
+    const map = L.map('map').setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: 'Map data © OpenStreetMap contributors'
+    }).addTo(map);
+
+    /****************************************************
+     * 1) Data Structures
+     ****************************************************/
+    // Each element of `countriesData` has:
+    // {
+    //   name: 'China',
+    //   geometry: <the original GeoJSON from Nominatim>,
+    //   years: {
+    //     '2009': { color: '#xxx', layer: L.GeoJSON(...) },
+    //     '2024': { color: '#yyy', layer: L.GeoJSON(...) },
+    //     ...
+    //   }
+    // }
+    let countriesData = [];
+
+    // Distinct color palette, cycle through
+    const distinctColors = [
+      '#e6194b','#3cb44b','#ffe119','#0082c8','#f58231','#911eb4','#46f0f0','#f032e6',
+      '#d2f53c','#fabebe','#008080','#e6beff','#aa6e28','#fffac8','#800000','#aaffc3',
+      '#808000','#ffd8b1','#000080','#808080','#000000'
+    ];
+    let colorIndex = 0;
+
+    // For suggestions
+    let validCountries = [];
+    fetch('https://restcountries.com/v3.1/all')
+      .then(r => r.json())
+      .then(data => {
+        validCountries = data.map(c => c.name.common.toLowerCase()).sort();
+      })
+      .catch(err => console.error('Error fetching RestCountries', err));
+
+    /****************************************************
+     * 2) DOM Elements
+     ****************************************************/
+    const countryInput  = document.getElementById('countryInput');
+    const suggestionsEl = document.getElementById('suggestions');
+    const yearInput     = document.getElementById('yearInput');
+    const totalCountEl  = document.getElementById('totalCount');
+    const allListEl     = document.getElementById('allList');
+    const yearFilterEl  = document.getElementById('yearFilter');
+    const yearListEl    = document.getElementById('yearList');
+
+    /****************************************************
+     * 3) Autocomplete
+     ****************************************************/
+    countryInput.addEventListener('input', () => {
+      const query = countryInput.value.trim().toLowerCase();
+      if (!query) {
+        suggestionsEl.style.display = 'none';
+        return;
+      }
+      // Filter validCountries
+      const matches = validCountries.filter(name => name.startsWith(query));
+      if (!matches.length) {
+        suggestionsEl.style.display = 'none';
+        return;
+      }
+      showSuggestions(matches);
+    });
+
+    function showSuggestions(matches) {
+      suggestionsEl.innerHTML = '';
+      matches.forEach(match => {
+        const div = document.createElement('div');
+        div.className = 'suggestion-item';
+        div.textContent = match;
+        div.onclick = () => {
+          countryInput.value = match;
+          suggestionsEl.style.display = 'none';
+        };
+        suggestionsEl.appendChild(div);
+      });
+      suggestionsEl.style.display = 'block';
+    }
+
+    document.addEventListener('click', e => {
+      if (!countryInput.contains(e.target) && !suggestionsEl.contains(e.target)) {
+        suggestionsEl.style.display = 'none';
+      }
+    });
+
+    /****************************************************
+     * 4) Add (Country, Year)
+     ****************************************************/
+    function addCountryYear() {
+      const name = countryInput.value.trim();
+      const year = yearInput.value.trim();
+
+      if (!name || !year) {
+        alert('Please enter a valid country and year.');
+        return;
+      }
+      // Validate country
+      if (!validCountries.includes(name.toLowerCase())) {
+        alert('Unknown country: ' + name);
+        return;
+      }
+
+      // See if country already in countriesData
+      let countryObj = countriesData.find(c => c.name.toLowerCase() === name.toLowerCase());
+
+      if (countryObj) {
+        // Country exists, check if year already present
+        if (countryObj.years[year]) {
+          alert(`${name} (${year}) is already in the list.`);
+          return;
+        }
+        // If geometry is known, just build a new layer
+        createLayerForYear(countryObj, year);
+      } else {
+        // Need to fetch geometry from Nominatim
+        fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+            name
+          )}&polygon_geojson=1`
+        )
+        .then(r => r.json())
+        .then(data => {
+          if (!data.length) {
+            alert('No polygon found in Nominatim for ' + name);
+            return;
+          }
+          // pick best
+          let best = data[0];
+          for (let d of data) {
+            if ((d.type === 'country' || d.type === 'administrative') && d.geojson) {
+              best = d;
+              break;
+            }
+          }
+          if (!best.geojson) {
+            alert('No polygon geometry in Nominatim for ' + name);
+            return;
+          }
+          // Build new country object
+          countryObj = {
+            name: name,
+            geometry: best.geojson,
+            years: {}
+          };
+          countriesData.push(countryObj);
+          // Now create the year entry
+          createLayerForYear(countryObj, year);
+        })
+        .catch(err => {
+          console.error(err);
+          alert('Error fetching geometry for ' + name);
+        });
+      }
+    }
+
+    // Helper to create a new year entry & layer
+    function createLayerForYear(countryObj, year) {
+      const color = distinctColors[colorIndex % distinctColors.length];
+      colorIndex++;
+
+      // Build a new Leaflet layer from the stored geometry
+      const layer = L.geoJSON(countryObj.geometry, {
+        style: {
+          color: '#000',
+          weight: 1,
+          fillColor: color,
+          fillOpacity: 0.5
+        }
+      });
+
+      // Put it in the dictionary
+      countryObj.years[year] = {
+        color: color,
+        layer: layer
+      };
+
+      // Rebuild UI + Map
+      updateAllList();
+      updateYearFilterOptions(); 
+      updateYearList();
+      updateMap();
+
+      // Optionally fit bounds
+      map.fitBounds(layer.getBounds());
+    }
+
+    /****************************************************
+     * 5) Building the "All Countries" List
+     ****************************************************/
+    function updateAllList() {
+      allListEl.innerHTML = '';
+      // For each country
+      countriesData.forEach(country => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'country-item';
+
+        // Top row: name + "Remove entire country" button
+        const topRow = document.createElement('div');
+        topRow.className = 'country-toprow';
+        // Label
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = country.name;
+        topRow.appendChild(labelSpan);
+
+        // Button to remove entire country
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-button';
+        removeBtn.textContent = 'Remove All';
+        removeBtn.onclick = () => removeCountryEntirely(country.name);
+        topRow.appendChild(removeBtn);
+
+        // A row of year badges
+        const yearsRow = document.createElement('div');
+        yearsRow.className = 'years-row';
+
+        const sortedYears = Object.keys(country.years).sort();
+        sortedYears.forEach(y => {
+          const badge = document.createElement('div');
+          badge.className = 'year-badge';
+
+          // Color box
+          const colorBox = document.createElement('span');
+          colorBox.className = 'country-color-box';
+          colorBox.style.backgroundColor = country.years[y].color;
+          badge.appendChild(colorBox);
+
+          // Text
+          const txt = document.createTextNode(` ${y}`);
+          badge.appendChild(txt);
+
+          // X to remove just that year
+          const removeYearBtn = document.createElement('button');
+          removeYearBtn.className = 'remove-year';
+          removeYearBtn.textContent = 'X';
+          removeYearBtn.onclick = () => removeCountryYear(country.name, y);
+          badge.appendChild(removeYearBtn);
+
+          yearsRow.appendChild(badge);
+        });
+
+        itemDiv.appendChild(topRow);
+        itemDiv.appendChild(yearsRow);
+
+        allListEl.appendChild(itemDiv);
+      });
+
+      // Update count
+      totalCountEl.textContent = `(${countriesData.length})`;
+
+    }
+
+    function removeCountryEntirely(countryName) {
+      // Remove from countriesData
+      const idx = countriesData.findIndex(c => c.name.toLowerCase() === countryName.toLowerCase());
+      if (idx !== -1) {
+        // Remove all layers from map
+        const yrs = countriesData[idx].years;
+        Object.keys(yrs).forEach(y => yrs[y].layer.remove());
+        countriesData.splice(idx, 1);
+      }
+      updateAllList();
+      updateYearFilterOptions();
+      updateYearList();
+      updateMap();
+    }
+
+    function removeCountryYear(countryName, year) {
+      // find the country
+      const countryObj = countriesData.find(c => c.name.toLowerCase() === countryName.toLowerCase());
+      if (!countryObj) return;
+
+      // remove its layer from the map
+      if (countryObj.years[year]) {
+        countryObj.years[year].layer.remove();
+        delete countryObj.years[year];
+      }
+
+      // If no years left, remove the country entirely
+      if (!Object.keys(countryObj.years).length) {
+        const idx = countriesData.indexOf(countryObj);
+        countriesData.splice(idx, 1);
+      }
+      // Rebuild
+      updateAllList();
+      updateYearFilterOptions();
+      updateYearList();
+      updateMap();
+    }
+
+    /****************************************************
+     * 6) Year Filter: only show years that actually exist
+     ****************************************************/
+    function updateYearFilterOptions() {
+      // gather all distinct years
+      const yearSet = new Set();
+      countriesData.forEach(c => {
+        Object.keys(c.years).forEach(y => yearSet.add(y));
+      });
+
+      // Clear filter, re-add "All"
+      const currentVal = yearFilterEl.value;
+      yearFilterEl.innerHTML = '<option value="all">All</option>';
+
+      // sort them
+      const distinctYears = Array.from(yearSet).sort();
+      distinctYears.forEach(y => {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        yearFilterEl.appendChild(opt);
+      });
+
+      // Attempt to restore old selection if still present
+      if (currentVal && (currentVal === 'all' || yearSet.has(currentVal))) {
+        yearFilterEl.value = currentVal;
+      } else {
+        yearFilterEl.value = 'all';
+      }
+    }
+
+    function handleYearFilterChange() {
+      updateYearList();
+      updateMap();
+    }
+
+    /****************************************************
+     * 7) Year-Filtered List
+     ****************************************************/
+    function updateYearList() {
+      yearListEl.innerHTML = '';
+      const filterVal = yearFilterEl.value;
+
+      // Build a sub-list of countries that contain that year
+      let filtered = [];
+      if (filterVal === 'all') {
+        // Just show everything
+        filtered = countriesData;
+      } else {
+        // Show only countries that have that year
+        filtered = countriesData.filter(c => c.years[filterVal]);
+      }
+
+      // Render similar to "All Countries," but we only show the chosen year(s).
+      filtered.forEach(c => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'country-item';
+
+        const topRow = document.createElement('div');
+        topRow.className = 'country-toprow';
+        // Label
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = c.name;
+        topRow.appendChild(labelSpan);
+        // No "remove all" button here, but you could add one if you want
+        itemDiv.appendChild(topRow);
+
+        const yearsRow = document.createElement('div');
+        yearsRow.className = 'years-row';
+
+        if (filterVal === 'all') {
+          // Show all years for that country
+          Object.keys(c.years).sort().forEach(y => {
+            const badge = buildYearBadge(c.name, y, c.years[y].color);
+            yearsRow.appendChild(badge);
+          });
+        } else {
+          // Just show the single year that matched
+          const color = c.years[filterVal].color;
+          const badge = buildYearBadge(c.name, filterVal, color);
+          yearsRow.appendChild(badge);
+        }
+
+        itemDiv.appendChild(yearsRow);
+        yearListEl.appendChild(itemDiv);
+      });
+    }
+
+    function buildYearBadge(countryName, year, color) {
+      const badge = document.createElement('div');
+      badge.className = 'year-badge';
+
+      const colorBox = document.createElement('span');
+      colorBox.className = 'country-color-box';
+      colorBox.style.backgroundColor = color;
+      badge.appendChild(colorBox);
+
+      const txt = document.createTextNode(` ${year}`);
+      badge.appendChild(txt);
+
+      const btn = document.createElement('button');
+      btn.className = 'remove-year';
+      btn.textContent = 'X';
+      btn.onclick = () => removeCountryYear(countryName, year);
+      badge.appendChild(btn);
+
+      return badge;
+    }
+
+    /****************************************************
+     * 8) Map Logic
+     ****************************************************/
+    function updateMap() {
+      // remove all layers
+      countriesData.forEach(c => {
+        Object.keys(c.years).forEach(y => {
+          c.years[y].layer.remove();
+        });
+      });
+
+      // figure out which set of years to show
+      const filterVal = yearFilterEl.value;
+      countriesData.forEach(c => {
+        if (filterVal === 'all') {
+          // add all
+          Object.keys(c.years).forEach(y => {
+            c.years[y].layer.addTo(map);
+          });
+        } else {
+          // add only if year matches
+          if (c.years[filterVal]) {
+            c.years[filterVal].layer.addTo(map);
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
